@@ -1,11 +1,12 @@
 import os
+import requests
+
 from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
 )
-
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
@@ -14,42 +15,85 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 Tiago Crypto AI 1.0\n\n"
         "Sistema online.\n\n"
-        "Comandos disponíveis:\n"
-        "/price - preço de uma moeda\n"
-        "/analyze - analisar uma moeda\n"
+        "Comandos:\n"
+        "/price SOL - preço atual\n"
+        "/analyze SOL - análise\n"
         "/scan - procurar oportunidades\n"
         "/help - ajuda"
     )
 
 
 async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "💰 Módulo de preços ainda não ligado.\n"
-        "Vamos ligá-lo aos dados de mercado no próximo passo."
-    )
+    if not context.args:
+        await update.message.reply_text(
+            "Usa assim:\n/price SOL"
+        )
+        return
+
+    symbol = context.args[0].upper()
+
+    try:
+        response = requests.get(
+            "https://api.dexscreener.com/latest/dex/search",
+            params={"q": symbol},
+            timeout=10
+        )
+
+        data = response.json()
+        pairs = data.get("pairs", [])
+
+        if not pairs:
+            await update.message.reply_text(
+                f"❌ Não encontrei dados para {symbol}."
+            )
+            return
+
+        pair = pairs[0]
+
+        price_usd = pair.get("priceUsd", "N/A")
+        volume = pair.get("volume", {}).get("h24", "N/A")
+        liquidity = pair.get("liquidity", {}).get("usd", "N/A")
+        change = pair.get("priceChange", {}).get("h24", "N/A")
+        chain = pair.get("chainId", "N/A")
+        dex = pair.get("dexId", "N/A")
+
+        message = (
+            f"💰 {symbol}\n\n"
+            f"Preço: ${price_usd}\n"
+            f"📈 Variação 24h: {change}%\n"
+            f"📊 Volume 24h: ${volume}\n"
+            f"💧 Liquidez: ${liquidity}\n"
+            f"⛓️ Chain: {chain}\n"
+            f"🏦 DEX: {dex}"
+        )
+
+        await update.message.reply_text(message)
+
+    except Exception as e:
+        print(f"Erro: {e}")
+        await update.message.reply_text(
+            "⚠️ Não consegui obter os dados neste momento."
+        )
 
 
 async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🧠 Módulo de análise iniciado.\n"
-        "Em breve vou analisar preço, volume, liquidez, "
-        "holders e risco."
+        "🧠 O módulo de análise será ligado ao scanner de mercado."
     )
 
 
 async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🔎 Scanner iniciado.\n"
-        "Ainda não existem fontes de mercado ligadas."
+        "🔎 O scanner ainda está a ser configurado."
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📋 Comandos:\n\n"
-        "/start - iniciar o sistema\n"
-        "/price - preços\n"
-        "/analyze - análise\n"
+        "/start - iniciar\n"
+        "/price SOL - preço\n"
+        "/analyze SOL - análise\n"
         "/scan - scanner\n"
         "/help - ajuda"
     )
