@@ -1,41 +1,66 @@
 import os
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+)
 
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
 
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Tiago Crypto AI is online")
-
-    def log_message(self, format, *args):
-        pass
-
-
-def start_web_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), HealthHandler)
-    server.serve_forever()
-
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 Tiago Crypto AI está online!\n\n"
-        "Sistema iniciado com sucesso."
+        "🤖 Tiago Crypto AI 1.0\n\n"
+        "Sistema online.\n\n"
+        "Comandos disponíveis:\n"
+        "/price - preço de uma moeda\n"
+        "/analyze - analisar uma moeda\n"
+        "/scan - procurar oportunidades\n"
+        "/help - ajuda"
     )
 
 
-web_thread = threading.Thread(target=start_web_server, daemon=True)
-web_thread.start()
+async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "💰 Módulo de preços ainda não ligado.\n"
+        "Vamos ligá-lo aos dados de mercado no próximo passo."
+    )
+
+
+async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🧠 Módulo de análise iniciado.\n"
+        "Em breve vou analisar preço, volume, liquidez, "
+        "holders e risco."
+    )
+
+
+async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🔎 Scanner iniciado.\n"
+        "Ainda não existem fontes de mercado ligadas."
+    )
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📋 Comandos:\n\n"
+        "/start - iniciar o sistema\n"
+        "/price - preços\n"
+        "/analyze - análise\n"
+        "/scan - scanner\n"
+        "/help - ajuda"
+    )
+
 
 app = Application.builder().token(TOKEN).build()
+
 app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("price", price))
+app.add_handler(CommandHandler("analyze", analyze))
+app.add_handler(CommandHandler("scan", scan))
+app.add_handler(CommandHandler("help", help_command))
 
 app.run_polling()
