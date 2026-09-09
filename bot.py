@@ -7,6 +7,16 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
 )
+KNOWN_TOKENS = {
+    "SOL": {
+        "chain": "solana",
+        "address": "So11111111111111111111111111111111111111112"
+    },
+    "BONK": {
+        "chain": "solana",
+        "address": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
+    }
+}
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
