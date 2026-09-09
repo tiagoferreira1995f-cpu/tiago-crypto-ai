@@ -33,49 +33,69 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
-            "Usa assim:\n/price SOL"
+            "Usa assim:\n/price SOL\n/price BONK"
         )
         return
 
     symbol = context.args[0].upper()
 
     try:
-        response = requests.get(
-            "https://api.dexscreener.com/latest/dex/search",
-            params={"q": symbol},
-            timeout=10
-        )
+        # Se for um token conhecido, usar o endereço oficial
+        if symbol in KNOWN_TOKENS:
+            token_info = KNOWN_TOKENS[symbol]
+            address = token_info["address"]
+            expected_chain = token_info["chain"]
 
-        response.raise_for_status()
-        data = response.json()
-        pairs = data.get("pairs", [])
+            response = requests.get(
+                f"https://api.dexscreener.com/latest/dex/tokens/{address}",
+                timeout=10
+            )
 
-        # Procurar apenas tokens cujo símbolo corresponde exatamente
-        matching_pairs = [
-            pair for pair in pairs
-            if pair.get("baseToken", {}).get("symbol", "").upper() == symbol
-        ]
+            response.raise_for_status()
+            data = response.json()
 
-        if not matching_pairs:
+            pairs = [
+                pair for pair in data.get("pairs", [])
+                if pair.get("chainId") == expected_chain
+            ]
+
+        else:
+            # Para tokens desconhecidos, procurar pelo símbolo
+            response = requests.get(
+                "https://api.dexscreener.com/latest/dex/search",
+                params={"q": symbol},
+                timeout=10
+            )
+
+            response.raise_for_status()
+            data = response.json()
+
+            pairs = [
+                pair for pair in data.get("pairs", [])
+                if pair.get("baseToken", {}).get("symbol", "").upper() == symbol
+            ]
+
+        if not pairs:
             await update.message.reply_text(
-                f"❌ Não encontrei um par exato para {symbol}."
+                f"❌ Não encontrei dados confiáveis para {symbol}."
             )
             return
 
         # Escolher o par com maior liquidez
-        matching_pairs.sort(
+        pairs.sort(
             key=lambda pair: float(
                 pair.get("liquidity", {}).get("usd") or 0
             ),
             reverse=True
         )
 
-        pair = matching_pairs[0]
+        pair = pairs[0]
 
         base_token = pair.get("baseToken", {})
+
         name = base_token.get("name", symbol)
         address = base_token.get("address", "N/A")
 
