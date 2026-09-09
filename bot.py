@@ -39,16 +39,35 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
             timeout=10
         )
 
+        response.raise_for_status()
         data = response.json()
         pairs = data.get("pairs", [])
 
-        if not pairs:
+        # Procurar apenas tokens cujo símbolo corresponde exatamente
+        matching_pairs = [
+            pair for pair in pairs
+            if pair.get("baseToken", {}).get("symbol", "").upper() == symbol
+        ]
+
+        if not matching_pairs:
             await update.message.reply_text(
-                f"❌ Não encontrei dados para {symbol}."
+                f"❌ Não encontrei um par exato para {symbol}."
             )
             return
 
-        pair = pairs[0]
+        # Escolher o par com maior liquidez
+        matching_pairs.sort(
+            key=lambda pair: float(
+                pair.get("liquidity", {}).get("usd") or 0
+            ),
+            reverse=True
+        )
+
+        pair = matching_pairs[0]
+
+        base_token = pair.get("baseToken", {})
+        name = base_token.get("name", symbol)
+        address = base_token.get("address", "N/A")
 
         price_usd = pair.get("priceUsd", "N/A")
         volume = pair.get("volume", {}).get("h24", "N/A")
@@ -58,13 +77,14 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         dex = pair.get("dexId", "N/A")
 
         message = (
-            f"💰 {symbol}\n\n"
-            f"Preço: ${price_usd}\n"
+            f"💰 {name} ({symbol})\n\n"
+            f"💵 Preço: ${price_usd}\n"
             f"📈 Variação 24h: {change}%\n"
             f"📊 Volume 24h: ${volume}\n"
             f"💧 Liquidez: ${liquidity}\n"
             f"⛓️ Chain: {chain}\n"
-            f"🏦 DEX: {dex}"
+            f"🏦 DEX: {dex}\n\n"
+            f"🔑 Contract:\n{address}"
         )
 
         await update.message.reply_text(message)
