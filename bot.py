@@ -33,7 +33,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
             "Usa assim:\n/price SOL\n/price BONK"
