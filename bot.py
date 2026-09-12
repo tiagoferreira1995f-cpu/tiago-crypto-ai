@@ -54,7 +54,11 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 timeout=10
             )
 
-            response.raise_for_status()
+      if response.status_code == 429:
+    await update.message.reply_text("⏳ DEX Screener está a limitar os pedidos. Tenta novamente daqui a pouco.")
+    return
+
+response.raise_for_status()
             data = response.json()
 
             pairs = [
