@@ -53,10 +53,10 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"https://api.dexscreener.com/latest/dex/tokens/{address}",
                 timeout=10
             )
-
-      if response.status_code == 429:
-    await update.message.reply_text("⏳ DEX Screener está a limitar os pedidos. Tenta novamente daqui a pouco.")
-    return
+            if response.status_code == 429:
+    await update.message.reply_text(
+        "⏳ A DEX Screener está a limitar os pedidos. Tenta novamente daqui a 1 minuto."
+    )
 
 response.raise_for_status()
             data = response.json()
