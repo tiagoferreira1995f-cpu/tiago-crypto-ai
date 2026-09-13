@@ -50,17 +50,18 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
             expected_chain = token_info["chain"]
 
             response = requests.get(
-                f"https://api.dexscreener.com/latest/dex/tokens/{address}",
-                timeout=10
-            )
-           
-            if response.status_code == 429:
+    f"https://api.dexscreener.com/latest/dex/tokens/{address}",
+    timeout=10
+)
+
+if response.status_code == 429:
     await update.message.reply_text(
         "⏳ A DEX Screener está a limitar os pedidos. Tenta novamente daqui a 1 minuto."
     )
+    return
 
 response.raise_for_status()
-            data = response.json()
+data = response.json()
 
             pairs = [
                 pair for pair in data.get("pairs", [])
