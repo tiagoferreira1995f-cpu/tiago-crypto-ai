@@ -50,7 +50,6 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
             expected_chain = token_info["chain"]
 
             response = requests.get(
-    f"https:response = requests.get(
                 f"https://api.dexscreener.com/latest/dex/tokens/{address}",
                 timeout=10
             )
