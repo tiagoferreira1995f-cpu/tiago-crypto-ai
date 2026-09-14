@@ -1,172 +1,214 @@
 import os
-import requests
+import time
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import requests
 from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
 )
+
+
+# ============================================================
+# CONFIGURAÇÃO
+# ============================================================
+
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TOKEN")
+
+PORT = int(os.getenv("PORT", "10000"))
+
+DEX_API = "https://api.dexscreener.com"
+
+CACHE_SECONDS = 30
+
+price_cache = {}
+
+
+# ============================================================
+# TOKENS CONHECIDOS
+# ============================================================
+
 KNOWN_TOKENS = {
     "SOL": {
         "chain": "solana",
-        "address": "So11111111111111111111111111111111111111112"
+        "address": "So11111111111111111111111111111111111111112",
     },
     "BONK": {
         "chain": "solana",
-        "address": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
-    }
+        "address": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+    },
 }
 
-TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
+# ============================================================
+# SERVIDOR HTTP PARA O RENDER
+# ============================================================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🤖 Tiago Crypto AI 1.0\n\n"
-        "Sistema online.\n\n"
-        "Comandos:\n"
-        "/price SOL - preço atual\n"
-        "/analyze SOL - análise\n"
-        "/scan - procurar oportunidades\n"
-        "/help - ajuda"
-    )
+class HealthHandler(BaseHTTPRequestHandler):
 
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Tiago Crypto AI is running.")
 
-async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text(
-            "Usa assim:\n/price SOL\n/price BONK"
-        )
+    def log_message(self, format, *args):
         return
 
-    symbol = context.args[0].upper()
+
+def start_web_server():
+    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+    print(f"Web server running on port {PORT}")
+    server.serve_forever()
+
+
+# ============================================================
+# DEX SCREENER
+# ============================================================
+
+def get_token_data(address, expected_chain=None):
+
+    now = time.time()
+
+    # Usar cache para evitar pedidos repetidos
+    if address in price_cache:
+
+        cached_time, cached_data = price_cache[address]
+
+        if now - cached_time < CACHE_SECONDS:
+            print(f"Using cached data for {address}")
+            return cached_data
+
+    url = f"{DEX_API}/latest/dex/tokens/{address}"
+
+    headers = {
+        "User-Agent": "Tiago-Crypto-AI/1.0"
+    }
 
     try:
-        # Se for um token conhecido, usar o endereço oficial
-        if symbol in KNOWN_TOKENS:
-            token_info = KNOWN_TOKENS[symbol]
-            address = token_info["address"]
-            expected_chain = token_info["chain"]
 
-            response = requests.get(
-                f"https://api.dexscreener.com/latest/dex/tokens/{address}",
-                timeout=10
-            )
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=15,
+        )
 
-            if response.status_code == 429:
-                await update.message.reply_text(
-                    "⏳ A DEX Screener está a limitar os pedidos. "
-                    "Tenta novamente daqui a 1 minuto."
-                )
-                return
+        # Limite da API
+        if response.status_code == 429:
 
-            response.raise_for_status()
-            data = response.json()
+            print("DEX Screener returned HTTP 429")
 
+            return {
+                "error": "429",
+                "message": (
+                    "A DEX Screener está a limitar temporariamente "
+                    "os pedidos. Tenta novamente dentro de alguns segundos."
+                ),
+            }
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        pairs = data.get("pairs", [])
+
+        if expected_chain:
             pairs = [
-                pair for pair in data.get("pairs", [])
+                pair
+                for pair in pairs
                 if pair.get("chainId") == expected_chain
-            ]
-
-            pairs = [
-                pair for pair in data.get("pairs", [])
-                if pair.get("chainId") == expected_chain
-            ]
-
-        else:
-            # Para tokens desconhecidos, procurar pelo símbolo
-            response = requests.get(
-                "https://api.dexscreener.com/latest/dex/search",
-                params={"q": symbol},
-                timeout=10
-            )
-
-            response.raise_for_status()
-            data = response.json()
-
-            pairs = [
-                pair for pair in data.get("pairs", [])
-                if pair.get("baseToken", {}).get("symbol", "").upper() == symbol
             ]
 
         if not pairs:
-            await update.message.reply_text(
-                f"❌ Não encontrei dados confiáveis para {symbol}."
-            )
-            return
+
+            return {
+                "error": "not_found",
+                "message": "Não encontrei pares para este token.",
+            }
 
         # Escolher o par com maior liquidez
         pairs.sort(
             key=lambda pair: float(
                 pair.get("liquidity", {}).get("usd") or 0
             ),
-            reverse=True
+            reverse=True,
         )
 
-        pair = pairs[0]
+        result = pairs[0]
 
-        base_token = pair.get("baseToken", {})
-
-        name = base_token.get("name", symbol)
-        address = base_token.get("address", "N/A")
-
-        price_usd = pair.get("priceUsd", "N/A")
-        volume = pair.get("volume", {}).get("h24", "N/A")
-        liquidity = pair.get("liquidity", {}).get("usd", "N/A")
-        change = pair.get("priceChange", {}).get("h24", "N/A")
-        chain = pair.get("chainId", "N/A")
-        dex = pair.get("dexId", "N/A")
-
-        message = (
-            f"💰 {name} ({symbol})\n\n"
-            f"💵 Preço: ${price_usd}\n"
-            f"📈 Variação 24h: {change}%\n"
-            f"📊 Volume 24h: ${volume}\n"
-            f"💧 Liquidez: ${liquidity}\n"
-            f"⛓️ Chain: {chain}\n"
-            f"🏦 DEX: {dex}\n\n"
-            f"🔑 Contract:\n{address}"
+        price_cache[address] = (
+            now,
+            result,
         )
 
-        await update.message.reply_text(message)
+        return result
 
-    except Exception as e:
-        print(f"Erro: {e}")
-        await update.message.reply_text(
-            "⚠️ Não consegui obter os dados neste momento."
-        )
+    except requests.exceptions.RequestException as error:
 
+        print(f"DEX API error: {error}")
 
-async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🧠 O módulo de análise será ligado ao scanner de mercado."
-    )
+        return {
+            "error": "request",
+            "message": (
+                "Não consegui contactar a DEX Screener neste momento."
+            ),
+        }
 
+    except Exception as error:
 
-async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🔎 O scanner ainda está a ser configurado."
-    )
+        print(f"Unexpected DEX error: {error}")
 
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📋 Comandos:\n\n"
-        "/start - iniciar\n"
-        "/price SOL - preço\n"
-        "/analyze SOL - análise\n"
-        "/scan - scanner\n"
-        "/help - ajuda"
-    )
+        return {
+            "error": "unknown",
+            "message": (
+                "Ocorreu um erro ao obter os dados do token."
+            ),
+        }
 
 
-app = Application.builder().token(TOKEN).build()
+# ============================================================
+# FORMATAR NÚMEROS
+# ============================================================
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("price", price))
-app.add_handler(CommandHandler("analyze", analyze))
-app.add_handler(CommandHandler("scan", scan))
-app.add_handler(CommandHandler("help", help_command))
+def format_number(value):
 
-app.run_polling()
+    if value is None:
+        return "N/A"
+
+    try:
+
+        number = float(value)
+
+        if number >= 1_000_000_000:
+            return f"{number / 1_000_000_000:.2f}B"
+
+        if number >= 1_000_000:
+            return f"{number / 1_000_000:.2f}M"
+
+        if number >= 1_000:
+            return f"{number / 1_000:.2f}K"
+
+        return f"{number:.2f}"
+
+    except Exception:
+        return str(value)
+
+
+# ============================================================
+# /START
+# ============================================================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    message = (
+        "🤖 Tiago Crypto AI\n\n"
+        "Bot de análise de mercado crypto.\n\n"
+        "Comandos disponíveis:\n"
+        "/price SOL\n"
+        "/price BONK\n"
+        "/price <contract>\n"
+        "/analyze SOL\n"
+ 
