@@ -17,18 +17,33 @@ from telegram.ext import (
 # ============================================================
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TOKEN")
-
 PORT = int(os.getenv("PORT", "10000"))
 
 DEX_API = "https://api.dexscreener.com"
 
 CACHE_SECONDS = 30
 
+# Simulação
+STARTING_BALANCE = 100.0
+TRAILING_STOP_PERCENT = 0.20
+MAX_POSITION_PERCENT = 0.20
+
+# Estado da simulação
+cash = STARTING_BALANCE
+positions = {}
+trade_history = []
+
+bot_running = False
+highest_portfolio_value = STARTING_BALANCE
+trailing_stop_value = STARTING_BALANCE * (
+    1 - TRAILING_STOP_PERCENT
+)
+
 price_cache = {}
 
 
 # ============================================================
-# TOKENS CONHECIDOS
+# TOKENS
 # ============================================================
 
 KNOWN_TOKENS = {
@@ -44,7 +59,7 @@ KNOWN_TOKENS = {
 
 
 # ============================================================
-# SERVIDOR HTTP PARA O RENDER
+# SERVIDOR WEB PARA O RENDER
 # ============================================================
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -53,15 +68,24 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"Tiago Crypto AI is running.")
+        self.wfile.write(
+            b"Tiago Crypto AI is running."
+        )
 
     def log_message(self, format, *args):
         return
 
 
 def start_web_server():
-    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
-    print(f"Web server running on port {PORT}")
+    server = HTTPServer(
+        ("0.0.0.0", PORT),
+        HealthHandler,
+    )
+
+    print(
+        f"Web server running on port {PORT}"
+    )
+
     server.serve_forever()
 
 
@@ -73,19 +97,17 @@ def get_token_data(address, expected_chain=None):
 
     now = time.time()
 
-    # Usar cache para evitar pedidos repetidos
     if address in price_cache:
 
         cached_time, cached_data = price_cache[address]
 
         if now - cached_time < CACHE_SECONDS:
-            print(f"Using cached data for {address}")
             return cached_data
 
     url = f"{DEX_API}/latest/dex/tokens/{address}"
 
     headers = {
-        "User-Agent": "Tiago-Crypto-AI/1.0"
+        "User-Agent": "Tiago-Crypto-AI/2.0"
     }
 
     try:
@@ -96,17 +118,13 @@ def get_token_data(address, expected_chain=None):
             timeout=15,
         )
 
-        # Limite da API
         if response.status_code == 429:
 
-            print("DEX Screener returned HTTP 429")
+            print("DEX Screener HTTP 429")
 
             return {
                 "error": "429",
-                "message": (
-                    "A DEX Screener está a limitar temporariamente "
-                    "os pedidos. Tenta novamente dentro de alguns segundos."
-                ),
+                "message": "DEX Screener está a limitar os pedidos."
             }
 
         response.raise_for_status()
@@ -116,6 +134,7 @@ def get_token_data(address, expected_chain=None):
         pairs = data.get("pairs", [])
 
         if expected_chain:
+
             pairs = [
                 pair
                 for pair in pairs
@@ -126,10 +145,9 @@ def get_token_data(address, expected_chain=None):
 
             return {
                 "error": "not_found",
-                "message": "Não encontrei pares para este token.",
+                "message": "Não encontrei pares para este token."
             }
 
-        # Escolher o par com maior liquidez
         pairs.sort(
             key=lambda pair: float(
                 pair.get("liquidity", {}).get("usd") or 0
@@ -152,9 +170,7 @@ def get_token_data(address, expected_chain=None):
 
         return {
             "error": "request",
-            "message": (
-                "Não consegui contactar a DEX Screener neste momento."
-            ),
+            "message": "Erro ao contactar a DEX Screener."
         }
 
     except Exception as error:
@@ -163,52 +179,65 @@ def get_token_data(address, expected_chain=None):
 
         return {
             "error": "unknown",
-            "message": (
-                "Ocorreu um erro ao obter os dados do token."
-            ),
+            "message": "Erro desconhecido."
         }
 
 
 # ============================================================
-# FORMATAR NÚMEROS
+# PREÇO DO TOKEN
 # ============================================================
 
-def format_number(value):
+def get_price(symbol):
 
-    if value is None:
-        return "N/A"
+    symbol = symbol.upper()
+
+    if symbol in KNOWN_TOKENS:
+
+        token = KNOWN_TOKENS[symbol]
+
+        data = get_token_data(
+            token["address"],
+            token["chain"],
+        )
+
+    else:
+
+        data = get_token_data(symbol)
+
+    if data.get("error"):
+        return None, data.get("message")
 
     try:
 
-        number = float(value)
+        price = float(
+            data.get("priceUsd")
+        )
 
-        if number >= 1_000_000_000:
-            return f"{number / 1_000_000_000:.2f}B"
-
-        if number >= 1_000_000:
-            return f"{number / 1_000_000:.2f}M"
-
-        if number >= 1_000:
-            return f"{number / 1_000:.2f}K"
-
-        return f"{number:.2f}"
+        return price, None
 
     except Exception:
-        return str(value)
+
+        return None, "Preço inválido."
 
 
 # ============================================================
-# /START
+# VALOR DA CARTEIRA
 # ============================================================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def get_portfolio_value():
 
-    message = (
-        "🤖 Tiago Crypto AI\n\n"
-        "Bot de análise de mercado crypto.\n\n"
-        "Comandos disponíveis:\n"
-        "/price SOL\n"
-        "/price BONK\n"
-        "/price <contract>\n"
-        "/analyze SOL\n"
- 
+    global cash
+
+    total = cash
+
+    for symbol, position in positions.items():
+
+        price, error = get_price(symbol)
+
+        if price is not None:
+
+            total += (
+                position["amount"] * price
+            )
+
+    ret
