@@ -5,46 +5,31 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import requests
 from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-)
+from telegram.ext import Application, CommandHandler, ContextTypes
 
-
-# ============================================================
-# CONFIGURAÇÃO
-# ============================================================
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TOKEN")
 PORT = int(os.getenv("PORT", "10000"))
 
 DEX_API = "https://api.dexscreener.com"
-
 CACHE_SECONDS = 30
 
-# Simulação
 STARTING_BALANCE = 100.0
 TRAILING_STOP_PERCENT = 0.20
 MAX_POSITION_PERCENT = 0.20
 
-# Estado da simulação
+
 cash = STARTING_BALANCE
 positions = {}
 trade_history = []
 
 bot_running = False
+
 highest_portfolio_value = STARTING_BALANCE
-trailing_stop_value = STARTING_BALANCE * (
-    1 - TRAILING_STOP_PERCENT
-)
+trailing_stop_value = STARTING_BALANCE * (1 - TRAILING_STOP_PERCENT)
 
 price_cache = {}
 
-
-# ============================================================
-# TOKENS
-# ============================================================
 
 KNOWN_TOKENS = {
     "SOL": {
@@ -58,40 +43,29 @@ KNOWN_TOKENS = {
 }
 
 
-# ============================================================
-# SERVIDOR WEB PARA O RENDER
-# ============================================================
-
 class HealthHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain")
         self.end_headers()
-        self.wfile.write(
-            b"Tiago Crypto AI is running."
-        )
+        self.wfile.write(b"Tiago Crypto AI is running.")
 
     def log_message(self, format, *args):
         return
 
 
 def start_web_server():
+
     server = HTTPServer(
         ("0.0.0.0", PORT),
-        HealthHandler,
+        HealthHandler
     )
 
-    print(
-        f"Web server running on port {PORT}"
-    )
+    print(f"Web server running on port {PORT}")
 
     server.serve_forever()
 
-
-# ============================================================
-# DEX SCREENER
-# ============================================================
 
 def get_token_data(address, expected_chain=None):
 
@@ -115,7 +89,7 @@ def get_token_data(address, expected_chain=None):
         response = requests.get(
             url,
             headers=headers,
-            timeout=15,
+            timeout=15
         )
 
         if response.status_code == 429:
@@ -152,14 +126,14 @@ def get_token_data(address, expected_chain=None):
             key=lambda pair: float(
                 pair.get("liquidity", {}).get("usd") or 0
             ),
-            reverse=True,
+            reverse=True
         )
 
         result = pairs[0]
 
         price_cache[address] = (
             now,
-            result,
+            result
         )
 
         return result
@@ -183,10 +157,6 @@ def get_token_data(address, expected_chain=None):
         }
 
 
-# ============================================================
-# PREÇO DO TOKEN
-# ============================================================
-
 def get_price(symbol):
 
     symbol = symbol.upper()
@@ -197,7 +167,7 @@ def get_price(symbol):
 
         data = get_token_data(
             token["address"],
-            token["chain"],
+            token["chain"]
         )
 
     else:
@@ -205,13 +175,12 @@ def get_price(symbol):
         data = get_token_data(symbol)
 
     if data.get("error"):
+
         return None, data.get("message")
 
     try:
 
-        price = float(
-            data.get("priceUsd")
-        )
+        price = float(data.get("priceUsd"))
 
         return price, None
 
@@ -219,10 +188,6 @@ def get_price(symbol):
 
         return None, "Preço inválido."
 
-
-# ============================================================
-# VALOR DA CARTEIRA
-# ============================================================
 
 def get_portfolio_value():
 
@@ -241,26 +206,43 @@ def get_portfolio_value():
             )
 
     return total
-    def update_trailing_stop():
+
+
+def update_trailing_stop():
+
     global highest_portfolio_value
     global trailing_stop_value
 
     portfolio_value = get_portfolio_value()
 
     if portfolio_value > highest_portfolio_value:
-        highest_portfolio_value = portfolio_value
-        trailing_stop_value = highest_portfolio_value * (1 - TRAILING_STOP_PERCENT)
 
-        print(f"New portfolio high: €{highest_portfolio_value:.2f}")
-        print(f"New trailing stop: €{trailing_stop_value:.2f}")
+        highest_portfolio_value = portfolio_value
+
+        trailing_stop_value = (
+            highest_portfolio_value
+            * (1 - TRAILING_STOP_PERCENT)
+        )
+
+        print(
+            f"New portfolio high: "
+            f"€{highest_portfolio_value:.2f}"
+        )
+
+        print(
+            f"New trailing stop: "
+            f"€{trailing_stop_value:.2f}"
+        )
 
     return portfolio_value
 
 
 def close_all_positions():
+
     global cash
 
     for symbol in list(positions.keys()):
+
         position = positions[symbol]
 
         price, error = get_price(symbol)
@@ -269,19 +251,25 @@ def close_all_positions():
             continue
 
         value = position["amount"] * price
+
         entry_value = position["entry_value"]
+
         profit = value - entry_value
 
         cash += value
 
-        trade_history.append({
-            "type": "SELL",
-            "symbol": symbol,
-            "value": value,
-            "profit": profit,
-            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "reason": "TRAILING STOP",
-        })
+        trade_history.append(
+            {
+                "type": "SELL",
+                "symbol": symbol,
+                "value": value,
+                "profit": profit,
+                "time": time.strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
+                "reason": "TRAILING STOP",
+            }
+        )
 
         del positions[symbol]
 
@@ -289,11 +277,13 @@ def close_all_positions():
 
 
 def check_trailing_stop():
+
     global bot_running
 
     portfolio_value = update_trailing_stop()
 
     if portfolio_value <= trailing_stop_value:
+
         print("TRAILING STOP ACTIVATED")
 
         close_all_positions()
@@ -306,20 +296,33 @@ def check_trailing_stop():
 
 
 def simulated_buy(symbol, amount_eur):
+
     global cash
 
     symbol = symbol.upper()
 
     if amount_eur <= 0:
+
         return "Valor de compra inválido."
 
     if amount_eur > cash:
-        return f"Saldo insuficiente. Saldo: €{cash:.2f}"
 
-    max_position = STARTING_BALANCE * MAX_POSITION_PERCENT
+        return (
+            f"Saldo insuficiente. "
+            f"Saldo: €{cash:.2f}"
+        )
+
+    max_position = (
+        STARTING_BALANCE
+        * MAX_POSITION_PERCENT
+    )
 
     if amount_eur > max_position:
-        return f"Máximo por posição: €{max_position:.2f}"
+
+        return (
+            f"Máximo por posição: "
+            f"€{max_position:.2f}"
+        )
 
     price, error = get_price(symbol)
 
@@ -331,22 +334,30 @@ def simulated_buy(symbol, amount_eur):
     cash -= amount_eur
 
     if symbol in positions:
+
         positions[symbol]["amount"] += tokens
+
         positions[symbol]["entry_value"] += amount_eur
+
     else:
+
         positions[symbol] = {
             "amount": tokens,
             "entry_price": price,
             "entry_value": amount_eur,
         }
 
-    trade_history.append({
-        "type": "BUY",
-        "symbol": symbol,
-        "value": amount_eur,
-        "price": price,
-        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-    })
+    trade_history.append(
+        {
+            "type": "BUY",
+            "symbol": symbol,
+            "value": amount_eur,
+            "price": price,
+            "time": time.strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+        }
+    )
 
     return (
         f"🟢 COMPRA SIMULADA\n\n"
@@ -358,12 +369,17 @@ def simulated_buy(symbol, amount_eur):
 
 
 def simulated_sell(symbol):
+
     global cash
 
     symbol = symbol.upper()
 
     if symbol not in positions:
-        return f"Não tens uma posição em {symbol}."
+
+        return (
+            f"Não tens uma posição "
+            f"em {symbol}."
+        )
 
     position = positions[symbol]
 
@@ -373,18 +389,26 @@ def simulated_sell(symbol):
         return error
 
     value = position["amount"] * price
-    profit = value - position["entry_value"]
+
+    profit = (
+        value
+        - position["entry_value"]
+    )
 
     cash += value
 
-    trade_history.append({
-        "type": "SELL",
-        "symbol": symbol,
-        "value": value,
-        "profit": profit,
-        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "reason": "MANUAL",
-    })
+    trade_history.append(
+        {
+            "type": "SELL",
+            "symbol": symbol,
+            "value": value,
+            "profit": profit,
+            "time": time.strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+            "reason": "MANUAL",
+        }
+    )
 
     del positions[symbol]
 
@@ -399,6 +423,7 @@ def simulated_sell(symbol):
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     message = (
         "🤖 Tiago Crypto AI 2.0\n\n"
         "Modo: SIMULAÇÃO\n"
@@ -420,7 +445,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(message)
 
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def help_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     message = (
         "📚 COMANDOS\n\n"
         "/price SOL\n"
@@ -445,9 +474,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(message)
 
 
-async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def price_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     if not context.args:
-        await update.message.reply_text("Exemplo: /price SOL")
+
+        await update.message.reply_text(
+            "Exemplo: /price SOL"
+        )
+
         return
 
     symbol = context.args[0].upper()
@@ -455,48 +492,93 @@ async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     price, error = get_price(symbol)
 
     if price is None:
-        await update.message.reply_text(f"❌ {error}")
+
+        await update.message.reply_text(
+            f"❌ {error}"
+        )
+
         return
 
     await update.message.reply_text(
-        f"💰 {symbol}\n\nPreço: ${price:.8f}"
+        f"💰 {symbol}\n\n"
+        f"Preço: ${price:.8f}"
     )
 
 
-async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def buy_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     if len(context.args) < 2:
-        await update.message.reply_text("Exemplo: /buy SOL 20")
+
+        await update.message.reply_text(
+            "Exemplo: /buy SOL 20"
+        )
+
         return
 
     symbol = context.args[0].upper()
 
     try:
-        amount = float(context.args[1])
+
+        amount = float(
+            context.args[1]
+        )
+
     except ValueError:
-        await update.message.reply_text("Valor inválido.")
+
+        await update.message.reply_text(
+            "Valor inválido."
+        )
+
         return
 
-    result = simulated_buy(symbol, amount)
+    result = simulated_buy(
+        symbol,
+        amount
+    )
 
-    await update.message.reply_text(result)
+    await update.message.reply_text(
+        result
+    )
 
 
-async def sell_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def sell_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     if not context.args:
-        await update.message.reply_text("Exemplo: /sell SOL")
+
+        await update.message.reply_text(
+            "Exemplo: /sell SOL"
+        )
+
         return
 
     symbol = context.args[0].upper()
 
-    result = simulated_sell(symbol)
+    result = simulated_sell(
+        symbol
+    )
 
-    await update.message.reply_text(result)
+    await update.message.reply_text(
+        result
+    )
 
 
-async def portfolio_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def portfolio_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     portfolio_value = get_portfolio_value()
 
-    profit = portfolio_value - STARTING_BALANCE
+    profit = (
+        portfolio_value
+        - STARTING_BALANCE
+    )
 
     message = (
         f"💼 PORTFÓLIO\n\n"
@@ -506,49 +588,82 @@ async def portfolio_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     if positions:
+
         message += "📊 POSIÇÕES\n\n"
 
         for symbol, position in positions.items():
+
             price, error = get_price(symbol)
 
             if price is None:
                 continue
 
-            current_value = position["amount"] * price
-            position_profit = current_value - position["entry_value"]
+            current_value = (
+                position["amount"]
+                * price
+            )
+
+            position_profit = (
+                current_value
+                - position["entry_value"]
+            )
 
             message += (
                 f"{symbol}\n"
                 f"Valor: €{current_value:.2f}\n"
                 f"P/L: €{position_profit:.2f}\n\n"
             )
+
     else:
+
         message += "Sem posições abertas."
 
-    await update.message.reply_text(message)
+    await update.message.reply_text(
+        message
+    )
 
 
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def status_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     portfolio_value = update_trailing_stop()
 
-    profit = portfolio_value - STARTING_BALANCE
+    profit = (
+        portfolio_value
+        - STARTING_BALANCE
+    )
 
-    state = "🟢 ATIVO" if bot_running else "🔴 PARADO"
+    state = (
+        "🟢 ATIVO"
+        if bot_running
+        else "🔴 PARADO"
+    )
 
     message = (
         "🤖 TIAGO CRYPTO AI\n\n"
         f"Estado: {state}\n"
         f"Carteira: €{portfolio_value:.2f}\n"
         f"P/L: €{profit:.2f}\n\n"
-        f"Máximo histórico: €{highest_portfolio_value:.2f}\n"
-        f"Trailing stop: €{trailing_stop_value:.2f}\n"
-        f"Proteção: {TRAILING_STOP_PERCENT * 100:.0f}%\n"
+        f"Máximo histórico: "
+        f"€{highest_portfolio_value:.2f}\n"
+        f"Trailing stop: "
+        f"€{trailing_stop_value:.2f}\n"
+        f"Proteção: "
+        f"{TRAILING_STOP_PERCENT * 100:.0f}%\n"
     )
 
-    await update.message.reply_text(message)
+    await update.message.reply_text(
+        message
+    )
 
 
-async def startbot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def startbot_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     global bot_running
 
     bot_running = True
@@ -559,7 +674,11 @@ async def startbot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def stopbot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def stopbot_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     global bot_running
 
     bot_running = False
@@ -569,115 +688,184 @@ async def stopbot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def history_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     if not trade_history:
+
         await update.message.reply_text(
             "Ainda não existem operações."
         )
+
         return
 
     recent = trade_history[-10:]
 
-    message = "📜 ÚLTIMAS OPERAÇÕES\n\n"
+    message = (
+        "📜 ÚLTIMAS OPERAÇÕES\n\n"
+    )
 
     for trade in recent:
+
         message += (
-            f"{trade['type']} {trade['symbol']}\n"
-            f"Valor: €{trade['value']:.2f}\n"
+            f"{trade['type']} "
+            f"{trade['symbol']}\n"
+            f"Valor: "
+            f"€{trade['value']:.2f}\n"
             f"{trade['time']}\n"
         )
 
         if "profit" in trade:
-            message += f"P/L: €{trade['profit']:.2f}\n"
+
+            message += (
+                f"P/L: "
+                f"€{trade['profit']:.2f}\n"
+            )
 
         message += "\n"
 
-    await update.message.reply_text(message)
+    await update.message.reply_text(
+        message
+    )
 
 
 def trading_monitor():
+
     global bot_running
 
     while True:
+
         try:
+
             if bot_running:
+
                 stopped = check_trailing_stop()
 
                 if stopped:
-                    print("Trading stopped by trailing stop.")
+
+                    print(
+                        "Trading stopped "
+                        "by trailing stop."
+                    )
 
             time.sleep(30)
 
         except Exception as error:
-            print(f"Monitor error: {error}")
+
+            print(
+                f"Monitor error: {error}"
+            )
+
             time.sleep(30)
 
 
 def main():
+
     if not TOKEN:
+
         raise RuntimeError(
-            "TELEGRAM_BOT_TOKEN não está configurado."
+            "TELEGRAM_BOT_TOKEN "
+            "não está configurado."
         )
 
     web_thread = threading.Thread(
         target=start_web_server,
         daemon=True
     )
+
     web_thread.start()
 
     monitor_thread = threading.Thread(
         target=trading_monitor,
         daemon=True
     )
+
     monitor_thread.start()
 
-    application = Application.builder().token(TOKEN).build()
-
-    application.add_handler(
-        CommandHandler("start", start)
+    application = (
+        Application.builder()
+        .token(TOKEN)
+        .build()
     )
 
     application.add_handler(
-        CommandHandler("help", help_command)
+        CommandHandler(
+            "start",
+            start
+        )
     )
 
     application.add_handler(
-        CommandHandler("price", price_command)
+        CommandHandler(
+            "help",
+            help_command
+        )
     )
 
     application.add_handler(
-        CommandHandler("buy", buy_command)
+        CommandHandler(
+            "price",
+            price_command
+        )
     )
 
     application.add_handler(
-        CommandHandler("sell", sell_command)
+        CommandHandler(
+            "buy",
+            buy_command
+        )
     )
 
     application.add_handler(
-        CommandHandler("portfolio", portfolio_command)
+        CommandHandler(
+            "sell",
+            sell_command
+        )
     )
 
     application.add_handler(
-        CommandHandler("status", status_command)
+        CommandHandler(
+            "portfolio",
+            portfolio_command
+        )
     )
 
     application.add_handler(
-        CommandHandler("startbot", startbot_command)
+        CommandHandler(
+            "status",
+            status_command
+        )
     )
 
     application.add_handler(
-        CommandHandler("stopbot", stopbot_command)
+        CommandHandler(
+            "startbot",
+            startbot_command
+        )
     )
 
     application.add_handler(
-        CommandHandler("history", history_command)
+        CommandHandler(
+            "stopbot",
+            stopbot_command
+        )
     )
 
-    print("Tiago Crypto AI started.")
+    application.add_handler(
+        CommandHandler(
+            "history",
+            history_command
+        )
+    )
+
+    print(
+        "Tiago Crypto AI started."
+    )
 
     application.run_polling()
 
 
 if __name__ == "__main__":
     main()
-
