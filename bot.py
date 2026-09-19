@@ -1,6 +1,7 @@
 import os
 import time
 import threading
+import logging
 from collections import deque
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -13,6 +14,12 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 # no wallet integration and no code capable of sending a real order.
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TOKEN")
 PORT = int(os.getenv("PORT", "10000"))
+
+logging.basicConfig(
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
 DEX_API = "https://api.dexscreener.com"
 CACHE_SECONDS = 90
@@ -510,6 +517,15 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(message)
 
 
+async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Record Telegram failures in Render logs without stopping the bot."""
+    logger.error(
+        "Telegram update failed (update=%s)",
+        update,
+        exc_info=context.error,
+    )
+
+
 def trading_monitor():
     while True:
         try:
@@ -542,6 +558,7 @@ def main():
     application.add_handler(CommandHandler("startbot", startbot_command))
     application.add_handler(CommandHandler("stopbot", stopbot_command))
     application.add_handler(CommandHandler("history", history_command))
+    application.add_error_handler(telegram_error_handler)
 
     print("Tiago Crypto AI AUTO TRADER v1 started in paper-trading mode.")
     application.run_polling()
