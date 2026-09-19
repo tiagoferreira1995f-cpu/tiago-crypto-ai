@@ -741,17 +741,31 @@ def trading_monitor():
 
             if bot_running:
 
-                stopped = check_trailing_stop()
+                try:
+                    stopped = check_trailing_stop()
 
-                if stopped:
+                    if stopped:
+                        print(
+                            "Trailing stop activated."
+                        )
 
+                except Exception as error:
                     print(
-                        "Trading stopped "
-                        "by trailing stop."
+                        f"Trading monitor error: {error}"
                     )
 
-            time.sleep(30)
+            # Esperar 2 minutos entre verificações.
+            # Isto reduz drasticamente os pedidos à API.
+            time.sleep(120)
 
+        except Exception as error:
+
+            print(
+                f"Monitor loop error: {error}"
+            )
+
+            # Nunca deixar o monitor morrer.
+            time.sleep(120)
         except Exception as error:
 
             print(
