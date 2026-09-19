@@ -161,18 +161,77 @@ def get_price(symbol):
 
     symbol = symbol.upper()
 
+    # Se for um token conhecido, usamos o endereço oficial
+    # configurado no bot.
     if symbol in KNOWN_TOKENS:
 
         token = KNOWN_TOKENS[symbol]
 
-        data = get_token_data(
-            token["address"],
-            token["chain"]
-        )
+        address = token["address"]
+        chain = token["chain"]
 
     else:
 
-        data = get_token_data(symbol)
+        # Para contratos, usamos o próprio símbolo como endereço.
+        address = symbol
+        chain = None
+
+    # Primeiro verifica se temos um preço recente em cache.
+    now = time.time()
+
+    if address in price_cache:
+
+        cached_time, cached_data = price_cache[address]
+
+        # Durante 5 minutos podemos reutilizar o último preço.
+        if now - cached_time < 300:
+
+            try:
+
+                cached_price = float(
+                    cached_data.get("priceUsd")
+                )
+
+                return cached_price, None
+
+            except Exception:
+                pass
+
+    # Só consulta a DEX Screener se não tivermos
+    # um preço recente disponível.
+    data = get_token_data(
+        address,
+        chain
+    )
+
+    # Se a API estiver a limitar pedidos, tenta utilizar
+    # o último preço conhecido.
+    if data.get("error") == "429":
+
+        if address in price_cache:
+
+            cached_time, cached_data = price_cache[address]
+
+            try:
+
+                cached_price = float(
+                    cached_data.get("priceUsd")
+                )
+
+                print(
+                    f"Using cached price for {symbol} "
+                    f"because DEX Screener returned 429."
+                )
+
+                return cached_price, None
+
+            except Exception:
+                pass
+
+        return None, (
+            "DEX Screener está a limitar os pedidos "
+            "e ainda não existe preço em cache."
+        )
 
     if data.get("error"):
 
@@ -180,7 +239,9 @@ def get_price(symbol):
 
     try:
 
-        price = float(data.get("priceUsd"))
+        price = float(
+            data.get("priceUsd")
+        )
 
         return price, None
 
