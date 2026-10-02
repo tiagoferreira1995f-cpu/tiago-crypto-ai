@@ -484,6 +484,55 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+def signal_report(symbol):
+    snapshot, error = get_market_snapshot(symbol)
+    if snapshot is None:
+        return f"{symbol}: ❌ {error}"
+
+    samples = price_samples[symbol]
+    sample_change = None
+    if len(samples) >= 2 and samples[0][1] > 0:
+        sample_change = ((samples[-1][1] / samples[0][1]) - 1) * 100
+
+    token = KNOWN_TOKENS[symbol]
+    with state_lock:
+        has_position = symbol in positions
+        cash_available = cash - AUTO_POSITION_EUR >= MIN_CASH_RESERVE
+        cooldown_remaining = max(
+            0,
+            int(COOLDOWN_SECONDS - (time.time() - last_trade_at[symbol])),
+        )
+
+    checks = [
+        ("Liquidez", snapshot["liquidity"] >= token["min_liquidity"],
+         f"${snapshot['liquidity']:,.0f} / mínimo ${token['min_liquidity']:,.0f}"),
+        ("Volume 1h", snapshot["volume_h1"] >= token["min_volume_h1"],
+         f"${snapshot['volume_h1']:,.0f} / mínimo ${token['min_volume_h1']:,.0f}"),
+        ("Momentum 5m", snapshot["change_m5"] >= 0.50,
+         f"{snapshot['change_m5']:+.2f}% / mínimo +0.50%"),
+        ("Tendência 1h", snapshot["change_h1"] >= 0.0,
+         f"{snapshot['change_h1']:+.2f}% / mínimo +0.00%"),
+        ("Duas leituras", sample_change is not None and sample_change >= 0.20,
+         "ainda sem duas leituras" if sample_change is None
+         else f"{sample_change:+.2f}% / mínimo +0.20%"),
+    ]
+
+    lines = [f"📡 SINAL {symbol}", f"Preço: ${snapshot['price']:.8f}", ""]
+    for label, passed, detail in checks:
+        lines.append(f"{'✅' if passed else '❌'} {label}: {detail}")
+    lines.append(f"{'❌' if has_position else '✅'} Posição: {'já aberta' if has_position else 'sem posição'}")
+    lines.append(f"{'✅' if cash_available else '❌'} Reserva de caixa: {'suficiente' if cash_available else 'insuficiente'}")
+    lines.append(
+        f"{'❌' if cooldown_remaining else '✅'} Cooldown: "
+        f"{'restam ' + str(cooldown_remaining // 60 + 1) + ' min' if cooldown_remaining else 'livre'}"
+    )
+    return "\n".join(lines)
+
+
+async def signals_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    reports = [signal_report(symbol) for symbol in KNOWN_TOKENS]
+    await update.message.reply_text("\n\n".join(reports))
+
 async def startbot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global bot_running
     with state_lock:
@@ -555,6 +604,7 @@ def main():
     application.add_handler(CommandHandler("sell", sell_command))
     application.add_handler(CommandHandler("portfolio", portfolio_command))
     application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("signals", signals_command))
     application.add_handler(CommandHandler("startbot", startbot_command))
     application.add_handler(CommandHandler("stopbot", stopbot_command))
     application.add_handler(CommandHandler("history", history_command))
