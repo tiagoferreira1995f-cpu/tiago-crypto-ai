@@ -21,12 +21,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
 DEX_API = "https://api.dexscreener.com"
+GECKO_API = "https://api.geckoterminal.com/api/v2"
 CACHE_SECONDS = 90
-
-# A short backoff avoids repeated requests, while a cold Render restart
-# can recover quickly instead of being unusable for five minutes.
+# A short backoff avoids repeatedly hitting the API, while a cold Render
+# restart can recover quickly instead of being unusable for five minutes.
 RATE_LIMIT_BACKOFF_SECONDS = 30
 MONITOR_SECONDS = 120
 
@@ -40,6 +39,9 @@ COOLDOWN_SECONDS = 15 * 60
 HARD_STOP_PERCENT = 0.08
 TAKE_PROFIT_PERCENT = 0.15
 MAX_HOLD_SECONDS = 6 * 60 * 60
+ENTRY_MIN_M5_PERCENT = 0.50
+ENTRY_MIN_H1_PERCENT = 0.0
+ENTRY_MIN_SAMPLE_PERCENT = 0.20
 
 
 cash = STARTING_BALANCE
@@ -98,6 +100,63 @@ def cached_data(address):
     return entry[1] if entry else None
 
 
+def get_gecko_terminal_data(address, chain):
+    """Map GeckoTerminal pool data to the DEX pair shape used by the bot."""
+    try:
+        response = requests.get(
+            f"{GECKO_API}/networks/{chain}/tokens/{address}/pools",
+            headers={"Accept": "application/json;version=20230203"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        resources = response.json().get("data", [])
+        if not resources:
+            return None
+
+        resources.sort(
+            key=lambda resource: float(
+                resource.get("attributes", {}).get("reserve_in_usd") or 0
+            ),
+            reverse=True,
+        )
+        for resource in resources:
+            attributes = resource.get("attributes", {})
+            relationships = resource.get("relationships", {})
+            base_id = (
+                relationships.get("base_token", {})
+                .get("data", {})
+                .get("id", "")
+            )
+            is_base_token = base_id.rsplit("_", 1)[-1].lower() == address.lower()
+            price = attributes.get(
+                "base_token_price_usd" if is_base_token else "quote_token_price_usd"
+            )
+            if price is None:
+                continue
+
+            return {
+                "chainId": chain,
+                "priceUsd": str(price),
+                "liquidity": {"usd": attributes.get("reserve_in_usd") or 0},
+                "volume": {"h1": attributes.get("volume_usd", {}).get("h1") or 0},
+                "priceChange": {
+                    "m5": attributes.get("price_change_percentage", {}).get("m5") or 0,
+                    "h1": attributes.get("price_change_percentage", {}).get("h1") or 0,
+                },
+            }
+    except (requests.exceptions.RequestException, TypeError, ValueError, KeyError) as error:
+        print(f"GeckoTerminal fallback error: {error}")
+    return None
+
+
+def fallback_market_data(address, chain, now):
+    fallback = get_gecko_terminal_data(address, chain)
+    if fallback:
+        price_cache[address] = (now, fallback)
+        print("DEX Screener unavailable; using GeckoTerminal market-data fallback.")
+    return fallback
+
+
 def get_token_data(address, expected_chain=None, force_refresh=False):
     """Return the most liquid pair, falling back to the last valid cache."""
     global rate_limited_until
@@ -111,12 +170,17 @@ def get_token_data(address, expected_chain=None, force_refresh=False):
         cached = cached_data(address)
         if cached:
             return cached
+        fallback = fallback_market_data(address, expected_chain, now)
+        if fallback:
+            return fallback
         return {
             "error": "429",
             "message": "DEX Screener está temporariamente em pausa por limite de pedidos.",
         }
 
     try:
+        # ``/latest/dex/tokens`` is a legacy endpoint.  Use the current
+        # documented token endpoint instead; it returns the pair list directly.
         response = requests.get(
             f"{DEX_API}/tokens/v1/{expected_chain}/{address}",
             headers={"User-Agent": "Tiago-Crypto-AI-Paper/3.0"},
@@ -128,6 +192,9 @@ def get_token_data(address, expected_chain=None, force_refresh=False):
             cached = cached_data(address)
             if cached:
                 return cached
+            fallback = fallback_market_data(address, expected_chain, now)
+            if fallback:
+                return fallback
             return {
                 "error": "429",
                 "message": "DEX Screener está a limitar os pedidos e não existe preço em cache.",
@@ -135,6 +202,8 @@ def get_token_data(address, expected_chain=None, force_refresh=False):
 
         response.raise_for_status()
         payload = response.json()
+        # The current endpoint returns a list.  Keep support for the old shape
+        # to make cache/error handling tolerant of a future API migration.
         pairs = (
             payload
             if isinstance(payload, list)
@@ -160,6 +229,9 @@ def get_token_data(address, expected_chain=None, force_refresh=False):
         cached = cached_data(address)
         if cached:
             return cached
+        fallback = fallback_market_data(address, expected_chain, now)
+        if fallback:
+            return fallback
         return {"error": "request", "message": "Erro ao contactar a DEX Screener."}
     except (TypeError, ValueError, KeyError) as error:
         print(f"Unexpected DEX response: {error}")
@@ -362,9 +434,12 @@ def strategy_entry_reason(symbol, snapshot, sample_change):
         return None
     if snapshot["volume_h1"] < token["min_volume_h1"]:
         return None
-    if snapshot["change_m5"] < 0.50 or snapshot["change_h1"] < 0.0:
+    if (
+        snapshot["change_m5"] < ENTRY_MIN_M5_PERCENT
+        or snapshot["change_h1"] < ENTRY_MIN_H1_PERCENT
+    ):
         return None
-    if sample_change is None or sample_change < 0.20:
+    if sample_change is None or sample_change < ENTRY_MIN_SAMPLE_PERCENT:
         return None
     return "AUTO ENTRY: tendência + momentum + liquidez"
 
@@ -418,7 +493,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🤖 Tiago Crypto AI AUTO TRADER v1\n\n"
         "Modo: SIMULAÇÃO EXCLUSIVA\nCapital inicial: €100\n\n"
         "Comandos:\n/price SOL\n/price BONK\n/buy SOL 20\n/sell SOL\n"
-        "/portfolio\n/status\n/startbot\n/stopbot\n/history\n/help\n\n"
+        "/portfolio\n/status\n/signals\n/startbot\n/stopbot\n/history\n/help\n\n"
         "⚠️ Não usa exchange, carteira, levantamentos nem dinheiro real."
     )
 
@@ -427,6 +502,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📚 COMANDOS\n\n/price SOL — consultar preço\n/buy SOL 20 — compra virtual\n"
         "/sell SOL — venda virtual\n/portfolio — carteira\n/status — estado e estratégia\n"
+        "/signals — condições atuais de entrada\n"
         "/startbot — ativar AUTO TRADER\n/stopbot — parar AUTO TRADER\n/history — operações\n\n"
         "AUTO TRADER: SOL/BONK, máximo €20 por posição, máximo €40 expostos, "
         "cooldown de 15 min, hard stop 8% e trailing stop global 20%."
@@ -519,16 +595,20 @@ def signal_report(symbol):
          f"${snapshot['liquidity']:,.0f} / mínimo ${token['min_liquidity']:,.0f}"),
         ("Volume 1h", snapshot["volume_h1"] >= token["min_volume_h1"],
          f"${snapshot['volume_h1']:,.0f} / mínimo ${token['min_volume_h1']:,.0f}"),
-        ("Momentum 5m", snapshot["change_m5"] >= 0.50,
-         f"{snapshot['change_m5']:+.2f}% / mínimo +0.50%"),
-        ("Tendência 1h", snapshot["change_h1"] >= 0.0,
-         f"{snapshot['change_h1']:+.2f}% / mínimo +0.00%"),
-        ("Duas leituras", sample_change is not None and sample_change >= 0.20,
+        ("Momentum 5m", snapshot["change_m5"] >= ENTRY_MIN_M5_PERCENT,
+         f"{snapshot['change_m5']:+.2f}% / mínimo +{ENTRY_MIN_M5_PERCENT:.2f}%"),
+        ("Tendência 1h", snapshot["change_h1"] >= ENTRY_MIN_H1_PERCENT,
+         f"{snapshot['change_h1']:+.2f}% / mínimo +{ENTRY_MIN_H1_PERCENT:.2f}%"),
+        ("Duas leituras", sample_change is not None and sample_change >= ENTRY_MIN_SAMPLE_PERCENT,
          "ainda sem duas leituras" if sample_change is None
-         else f"{sample_change:+.2f}% / mínimo +0.20%"),
+         else f"{sample_change:+.2f}% / mínimo +{ENTRY_MIN_SAMPLE_PERCENT:.2f}%"),
     ]
 
-    lines = [f"📡 SINAL {symbol}", f"Preço: ${snapshot['price']:.8f}", ""]
+    lines = [
+        f"📡 SINAL {symbol}",
+        f"Preço: ${snapshot['price']:.8f}",
+        "",
+    ]
     for label, passed, detail in checks:
         lines.append(f"{'✅' if passed else '❌'} {label}: {detail}")
     lines.append(f"{'❌' if has_position else '✅'} Posição: {'já aberta' if has_position else 'sem posição'}")
@@ -543,6 +623,7 @@ def signal_report(symbol):
 async def signals_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reports = [signal_report(symbol) for symbol in KNOWN_TOKENS]
     await update.message.reply_text("\n\n".join(reports))
+
 
 async def startbot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global bot_running
