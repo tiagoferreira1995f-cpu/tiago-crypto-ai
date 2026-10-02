@@ -21,9 +21,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 DEX_API = "https://api.dexscreener.com"
 CACHE_SECONDS = 90
-RATE_LIMIT_BACKOFF_SECONDS = 300
+
+# A short backoff avoids repeated requests, while a cold Render restart
+# can recover quickly instead of being unusable for five minutes.
+RATE_LIMIT_BACKOFF_SECONDS = 30
 MONITOR_SECONDS = 120
 
 STARTING_BALANCE = 100.0
@@ -114,7 +118,7 @@ def get_token_data(address, expected_chain=None, force_refresh=False):
 
     try:
         response = requests.get(
-            f"{DEX_API}/latest/dex/tokens/{address}",
+            f"{DEX_API}/tokens/v1/{expected_chain}/{address}",
             headers={"User-Agent": "Tiago-Crypto-AI-Paper/3.0"},
             timeout=15,
         )
@@ -130,7 +134,14 @@ def get_token_data(address, expected_chain=None, force_refresh=False):
             }
 
         response.raise_for_status()
-        pairs = response.json().get("pairs", [])
+        payload = response.json()
+        pairs = (
+            payload
+            if isinstance(payload, list)
+            else payload.get("pairs", [])
+            if isinstance(payload, dict)
+            else []
+        )
         if expected_chain:
             pairs = [pair for pair in pairs if pair.get("chainId") == expected_chain]
         if not pairs:
